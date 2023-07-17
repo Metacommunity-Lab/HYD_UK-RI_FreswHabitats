@@ -1,7 +1,7 @@
 ---
 title: "Pondscape or waterscape? The effect on the diversity of dispersal along different freshwater ecosystems"
 author: "Ana I. Borthagaray, David Cunillera-Montcusí, Jordi Bou, Jeremy Biggs, and Matías Arim"
-subtitle: "Hydrobiologia - DOI: https:// doi.org/ 10. 1007/ s10750- 022- 05123-0"
+subtitle: "Hydrobiologia - DOI: https://doi.org/10.1007/s10750-022-05123-0"
 date: "Submitted - 16/02/2022"
 output: rmdformats::downcute
 knit: (function(input_file, encoding) {
@@ -32,7 +32,9 @@ To properly follow the following steps we recommend to read the entire work to b
 
 Link to the function: https://github.com/Metacommunity-Lab/HYDR_UK-IR_FreshwHabitats
 
-Link to supplementary material: https:// doi.org/ 10. 1007/ s10750- 022- 05123-0
+Link to supplementary material: https://doi.org/10.1007/s10750-022-05123-0
+
+*Note to the version*: All the .RData files are too heavy to be uploaded into the GitHub repository and can be downloaded from the following zenodo repository: 
 
 ```{r packages , eval=FALSE}
 # Load basic functions to run all the simulations
