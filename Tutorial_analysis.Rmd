@@ -24,13 +24,13 @@ All the suplementary material images, original scripts and used functions can be
 
 Article DOI: https://doi.org/10.1007/s10750-022-05123-0
 
-Direct link to repositpory: https://github.com/Metacommunity-Lab/HYDR_UK-IR_FreshwHabitats
+Direct link to repositpory: https://github.com/Metacommunity-Lab/HYD_UK-RI_FreswHabitats
 
 To properly follow the following steps we recommend to read the entire work to better contextualize the use and limitations of the current codes and functions. 
 
 ## *The scripts can be found in the following repository*
 
-Link to the function: https://github.com/Metacommunity-Lab/HYDR_UK-IR_FreshwHabitats
+Link to the function: https://github.com/Metacommunity-Lab/HYD_UK-RI_FreswHabitats
 
 Link to supplementary material: https://doi.org/10.1007/s10750-022-05123-0
 
