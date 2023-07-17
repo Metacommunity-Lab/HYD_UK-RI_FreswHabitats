@@ -34,7 +34,7 @@ Link to the function: https://github.com/Metacommunity-Lab/HYD_UK-RI_FreswHabita
 
 Link to supplementary material: https://doi.org/10.1007/s10750-022-05123-0
 
-*Note to the version*: All the .RData files are too heavy to be uploaded into the GitHub repository and can be downloaded from the following zenodo repository: 
+*Note to the version*: All the .RData files are too heavy to be uploaded into the GitHub repository and can be downloaded from the following zenodo repository: https://zenodo.org/record/8155013
 
 ```{r packages , eval=FALSE}
 # Load basic functions to run all the simulations
