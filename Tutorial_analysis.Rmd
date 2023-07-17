@@ -1,0 +1,1040 @@
+---
+title: "Pondscape or waterscape? The effect on the diversity of dispersal along different freshwater ecosystems"
+author: "Ana I. Borthagaray, David Cunillera-Montcusí, Jordi Bou, Jeremy Biggs, and Matías Arim"
+subtitle: "Hydrobiologia - DOI: https:// doi.org/ 10. 1007/ s10750- 022- 05123-0"
+date: "Submitted - 16/02/2022"
+output: rmdformats::downcute
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+  encoding=encoding,
+  output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,
+                      results = "hide",
+                      message=FALSE, warning=FALSE)
+```
+
+# **Script introduction**
+
+Find in the following lines the code corresponding to the analysis of the article: Pondscape or waterscape? The effect on the diversity of dispersal along different freshwater ecosystems.
+
+All the suplementary material images, original scripts and used functions can be found in:
+
+Article DOI: https://doi.org/10.1007/s10750-022-05123-0
+
+Direct link to repositpory: https://github.com/Metacommunity-Lab/HYDR_UK-IR_FreshwHabitats
+
+To properly follow the following steps we recommend to read the entire work to better contextualize the use and limitations of the current codes and functions. 
+
+## *The scripts can be found in the following repository*
+
+Link to the function: https://github.com/Metacommunity-Lab/HYDR_UK-IR_FreshwHabitats
+
+Link to supplementary material: https:// doi.org/ 10. 1007/ s10750- 022- 05123-0
+
+```{r packages , eval=FALSE}
+# Load basic functions to run all the simulations
+library(dplyr); library(tibble); library(ggplot2); library(gridExtra);library(geosphere);library(sp);library(stars)
+load("Paisaje_UK.RData")
+```
+
+The following tutorial is structured in 3 main parts corresponding to the main steps of the analysis: 
+
+1. **Charging** and preparation of the datasets. 
+The charged datasets correspond to the different water covers (Permannet, Temporal, Ephemeral) and the corresponding databases matching among them. Distances calculations and network (graph) creation. 
+All these initial steps were meant to prepare the database and explore the distribution of the habitats through the United kingdom and the Republic of Ireland.
+
+2. **Running** the coalescent models.  
+We run these models for each one of the explored combinations of habitats:
+- Permanent without considering Temporal and Ephemeral
+- Permanent considering Temporal and Ephemeral
+- Temporal without considering Permanent and Ephemeral
+- Temporal considering Permanent and Ephemeral
+- Ephemeral without considering Temporal and Permanent
+- Ephemeral considering Temporal and Permanent
+For each one of the runs of the current models we obtained the expected mean richness that later ploted and compared along figures. 
+
+3. **Plotting** and comparisons of the results. 
+Plots scripts contain also the analysis carried for each comparison (Figure 5) where we crossed the richness values obtained from considering or not the other types of environments when assessing richness values for a determined habitat. 
+
+
+# 1. **Charging** 
+The database and obtaining United Kingdom and Republic of Ireland cell values for the three types of environments that were obtained from Pekel, J. F. et al. 2016. High-resolution mapping of global surface water and its long-term changes. - Nature 540: 418–422 by tranforming the surface data into 10x10km grid cells accross Europe. 
+
+The first steps are to filter United Kingdom and Republic of Ireland cells from the main dataset as well as chekc they are correctly selected. 
+```{r Charging dataset , eval=FALSE}
+head(M.Europa.J) ### Main matrix wiht all the information from the EU continent as well as habitat types
+dim(M.Europa.J)
+
+unique(M.Europa.J$ISO3_CODE) # Country distinction
+a1<-M.Europa.J[which(M.Europa.J$ISO3_CODE=="GBR"),]#Filetering for UK
+a2<-M.Europa.J[which(M.Europa.J$ISO3_CODE=="IRL"),]#Filetering for RI
+dim(a1)[1]+dim(a2)[1]
+M.UK<-rbind(a2,a1)
+head(M.UK)
+dim(M.UK)
+
+### plot the selected cells to check coherence
+par(mar=c(2.5,2.5,1.5,1.5),bty="l",cex=1.8)
+plot(M.Europa.J$CENTROID_Y~M.Europa.J$CENTROID_X,cex=0.1,col="light gray",pch=15)
+points(M.UK$CENTROID_Y~M.UK$CENTROID_X,cex=0.1,col="orange",pch=15)
+unique(M.UK$ISO3_CODE)
+
+```
+
+Once the UK+RI are obtained we can start to prepare and order the dataset as well as calculate the main distance matrix that will weight the corresponding graphs.   
+```{r Charging UK dataset , eval=FALSE}
+coord.xy<-cbind(M.UK$CENTROID_X,M.UK$CENTROID_Y)
+colnames(coord.xy)<-c("CENTROID_X "," CENTROID_Y")
+FreshW_coord <- st_as_sf(as.data.frame(coord.xy),coords = c("CENTROID_X "," CENTROID_Y")) # Transforming to sf format
+FreshW_coord_spatial <- as(FreshW_coord, "Spatial") # Convert to "old" format to caluclate to distances
+aa_en_metros<- distm(FreshW_coord_spatial,FreshW_coord_spatial, fun = distGeo) #### Calculate the distance matrix (in METRES!!!) from a lat/long values 
+
+dim(M.UK); dim(aa_en_metros)
+colnames(aa_en_metros)<-M.UK$PageName
+rownames(aa_en_metros)<-M.UK$PageName
+aa_en_km<-aa_en_metros/1000 # Conversion to km
+aa_en_km[1:10,1:10]
+
+# Distance matrix correction for the neighbouring cells and the cells with themselves
+aa_en_km.min_10<-ifelse(aa_en_km<10,10,aa_en_km)
+## Corrected to have a distance of 1 for two contiguous cells
+Distancia.UK<-(aa_en_km.min_10-10) ## Corrected distance for having a 0 with distance to himself
+Distancia.UK[1:10,1:10] ## Check corrected matrix in km
+```
+
+The last key step is to build the  final distance matrix that weights a exponentially decreasing probability of dispersal with the D50 (defined in the article) of 4 km. This means that probability of dispersal between two cells is 0.5 at 4 km. We correct distance matrices to incorporate this feature of probability in order to transform distance matrices to dispersal probability matrices.  
+
+```{r Distance dataset for 4 km , eval=FALSE}
+# D50.4 - D50 is 4 KM
+rm(D50)
+D50<-4
+b.mig=(-log(.5)/(D50)) ## -log(y)/D50 #### D50= diagonal cetr-cent + distancia en KM
+par(mar=c(4,4,.5,.5),cex=1.4,bty="l")
+plot(exp(-b.mig*(0:200))~I(0:200),ylim=c(0,1),type="l",lwd=4,col="dark green",ylab="Dispersal probability",xlab="Distance (Km)")
+abline(h=0.5)
+exp(-b.mig*4)
+b.mig_D50.4<-b.mig
+rm(b.mig)
+
+## exp(-b^Dij)*Ji
+dim(Distancia.UK); dim(M.UK)
+exp(-b.mig_D50.4*Distancia.UK)*M.UK$J.efimero->mm.efimero.D50.4 ## 1
+exp(-b.mig_D50.4*Distancia.UK)*M.UK$J.temporal->mm.temporal.D50.4 ## 2
+exp(-b.mig_D50.4*Distancia.UK)*M.UK$J.permanente->mm.permanente.D50.4 ## 3
+exp(-b.mig_D50.4*Distancia.UK)*M.UK$J.freshwater->mm.fw.D50.4 ## 
+#______
+id.fw<-which(M.UK$FRESHWATER!=0) ### 4384 son agua
+id.efimero<-which(M.UK$FRESHWATER.efimeros!=0) ### 2220 fw efimeros
+id.temporal<-which(M.UK$FRESHWATER.temporales!=0) ### 4527 fw temporales
+id.permanentes<-which(M.UK$FRESHWATER.permanentes!=0) ### 4733 fw permanentes
+```
+
+The created matrices (i.e. mm.efimero.D50.4, mm.temporal.D50.4,mm.permanente.D50.4, mm.fw.D50.4) will be used later for the coalescent modeling (see below step 2). 
+However, we also used these matrices to explore network structure and created graphs from them to later plot their centrality patterns (see last supplementary figure and following code). 
+
+```{r Graph creation and degree , eval=FALSE}
+detach("package:sna", unload = TRUE)
+library(igraph) ### PARA el betwenness y closeness estimados en igraph los weights son considerados distancias, por eso ponemos 1/dist como weight
+##  weighted betweenness centrality per freshwater
+##### bc.efimero.D50.4
+graph.adjacency(1/(mm.efimero.D50.4[id.efimero,id.efimero]),mode="directed",weighted = TRUE)->g0.efimero.D50.4
+betweenness(g0.efimero.D50.4,directed = TRUE)->bc.efimero.D50.4 ### SUS WEIGHTS SON DISTANCIAS; ACA el peso deberia ser 1/mij y esta incluido en la construccion del grafo
+rm(g0.efimero.D50.4)
+
+graph.adjacency(1/(mm.temporal.D50.4[id.temporal,id.temporal]),mode="directed",weighted = TRUE)->g0.temporal.D50.4
+betweenness(g0.temporal.D50.4,directed = TRUE)->bc.temporal.D50.4
+rm(g0.temporal.D50.4)
+
+graph.adjacency(1/(mm.permanente.D50.4[id.permanentes,id.permanentes]),mode="directed",weighted = TRUE)->g0.permanente.D50.4
+betweenness(g0.permanente.D50.4,directed = TRUE)->bc.permanente.D50.4
+rm(g0.permanente.D50.4)
+
+graph.adjacency(1/(mm.fw.D50.4[id.fw,id.fw]),mode="directed",weighted = TRUE)->g0.fw.D50.4
+betweenness(g0.fw.D50.4,directed = TRUE)->bc.fw.D50.4
+rm(g0.fw.D50.4)
+
+# Degree calculation
+detach("package:igraph", unload = TRUE)
+library("sna") #### To estimate degree with sna, weights are considerd as weights
+degree(mm.efimero.D50.4[id.efimero,id.efimero],gmode="digraph",cmode="indegree")->grado.in.efimero.D50.4
+degree(mm.efimero.D50.4[id.efimero,id.efimero],gmode="digraph",cmode="outdegree")->grado.out.efimero.D50.4
+degree(mm.efimero.D50.4[id.efimero,id.efimero],gmode="digraph",cmode="freeman")->grado.all.efimero.D50.4
+colnames(M.UK)
+head(cbind(M.UK[id.efimero,c(1:9,c(10,11),c(14,15))],grado.in.efimero.D50.4,grado.out.efimero.D50.4,grado.all.efimero.D50.4))
+
+degree(mm.temporal.D50.4[id.temporal,id.temporal],gmode="digraph",cmode="indegree")->grado.in.temporal.D50.4
+degree(mm.temporal.D50.4[id.temporal,id.temporal],gmode="digraph",cmode="outdegree")->grado.out.temporal.D50.4
+degree(mm.temporal.D50.4[id.temporal,id.temporal],gmode="digraph",cmode="freeman")->grado.all.temporal.D50.4
+head(cbind(M.UK[id.temporal,c(1:9,c(10,12),c(14,16))],grado.in.temporal.D50.4,grado.out.temporal.D50.4,grado.all.temporal.D50.4))
+
+degree(mm.permanente.D50.4[id.permanentes,id.permanentes],gmode="digraph",cmode="indegree")->grado.in.permanente.D50.4
+degree(mm.permanente.D50.4[id.permanentes,id.permanentes],gmode="digraph",cmode="outdegree")->grado.out.permanente.D50.4
+degree(mm.permanente.D50.4[id.permanentes,id.permanentes],gmode="digraph",cmode="freeman")->grado.all.permanente.D50.4
+head(cbind(M.UK[id.permanentes,c(1:9,c(10,13),c(14,17))],grado.in.permanente.D50.4,grado.out.permanente.D50.4,grado.all.permanente.D50.4))
+
+degree(mm.fw.D50.4[id.fw,id.fw],gmode="digraph",cmode="indegree")->grado.in.fw.D50.4
+degree(mm.fw.D50.4[id.fw,id.fw],gmode="digraph",cmode="outdegree")->grado.out.fw.D50.4
+degree(mm.fw.D50.4[id.fw,id.fw],gmode="digraph",cmode="freeman")->grado.all.fw.D50.4
+head(cbind(M.UK[id.fw,c(1:9,c(10),c(14))],grado.in.fw.D50.4,grado.out.fw.D50.4,grado.all.fw.D50.4))
+```
+
+
+In the following lines we carry the last polishing of some objects and gathering of the information used later in the coalescent modeling approximation.   
+```{r Final objects for iteration model , eval=FALSE}
+colnames(M.UK)
+M.Efimeros.D50.4<-cbind(M.UK[id.efimero,c(1:9,c(11),c(15))],rep(1,length(id.efimero)),grado.in.efimero.D50.4,grado.out.efimero.D50.4,grado.all.efimero.D50.4,bc.efimero.D50.4)
+M.Temporal.D50.4<-cbind(M.UK[id.temporal,c(1:9,c(12),c(16))],rep(2,length(id.temporal)),grado.in.temporal.D50.4,grado.out.temporal.D50.4,grado.all.temporal.D50.4,bc.temporal.D50.4)
+M.Permanentes.D50.4<-cbind(M.UK[id.permanentes,c(1:9,c(13),c(17))],rep(3,length(id.permanentes)),grado.in.permanente.D50.4,grado.out.permanente.D50.4,grado.all.permanente.D50.4,bc.permanente.D50.4)
+M.FW.D50.4.UK<-(cbind(M.UK[id.fw,c(1:9,c(10),c(14))],rep(100,length(id.fw)),grado.in.fw.D50.4,grado.out.fw.D50.4,grado.all.fw.D50.4,bc.fw.D50.4))
+
+colnames(M.Efimeros.D50.4)[10:16]
+colnames(M.Efimeros.D50.4)[10:16]<-c("FW.Area","J.uk","EF(1).T(2).P(3)","grado.in.D50.4",
+                                     "grado.out.D50.4","grado.all.D50.4",
+                                     "bc.D50.4")
+colnames(M.Efimeros.D50.4)[10:16]->colnames(M.Temporal.D50.4)[10:16]
+colnames(M.Efimeros.D50.4)[10:16]->colnames(M.Permanentes.D50.4)[10:16]
+colnames(M.Efimeros.D50.4)[10:16]->colnames(M.FW.D50.4.UK)[10:16]
+
+M.LAND<-cbind(M.UK[-id.fw,c(1:9)],0,0,0,0,0,0,0)
+colnames(M.LAND)[10:16]<-colnames(M.Efimeros.D50.4)[10:16]
+head(M.LAND)
+
+M.final.UK<-rbind(M.Efimeros.D50.4,M.Temporal.D50.4,M.Permanentes.D50.4,M.LAND)
+head(M.final.UK)
+dim(M.final.UK) ## 11721
+unique(M.final.UK$ISO3_CODE)
+unique(M.final.UK$`EF(1).T(2).P(3)`)
+
+M.final.FW.UK<-rbind(M.FW.D50.4.UK,M.LAND)
+unique(M.final.FW.UK$ISO3_CODE)
+unique(M.final.FW.UK$`EF(1).T(2).P(3)`)
+```
+
+
+# 2. **Running** 
+We run the coalescent modeling function that is written in the script H2020_Lattice_exp_Kernel_J-environment_2.0_FILTERS.R also contained in the online repository https://github.com/Metacommunity-Lab/HYDR_UK-IR_FreshwHabitats. 
+
+Initial settings & metacommunity assembly lines. Freshwaters were classified in:
+"ephemeral": <10% of water events along 30 years of sattelite images
+"temporal" : 10%< water events<90%
+"permanent":  water events>90%
+
+Performance of species was depenent on freshwater environment (see Figure 1) and the waterscape was a 10 x 10kms grid for UK+RI.Each cell in the grid reports the amount of ephemeral, temporal, and permanent water cover. Ephemeral, temporal, and permanent waters were considered as different communities in the simulation. Each freshwater has a different filter for species performance (estimated in "H2020_UK&IR_Fitness_set_up.R"). The number of individuals in each cell is proportional to the area total water surface in each cell.  
+
+```{r Load packages and function second part , eval=FALSE}
+# Load basic functions to run all the simulations
+library(dplyr); library(tibble); library(ggplot2); library(gridExtra);library(geosphere);library(sp);library(stars)
+load("UK_space.RData")
+source("H2020_Lattice_exp_Kernel_J-environment_2.0_FILTERS.R")
+```
+
+## All freshwaters
+We build and charge all the datasets needed to run the current model and run the first iteration model considering all the types of habitats together as well as the corresponding Filters previously calculated. 
+```{r Function loading and preparation , eval=FALSE}
+M.dist.UK<-as.matrix(dist(M.UK[,2:3], method = "euclidean"))
+
+Spp.pool<-rep(1,200) # Uniform species abundance distribution is assumed for the pool
+mod.temp<-rep(1,nrow(M.UK))
+mod.temp[1:10]<-2
+# First iteration model considering all freshwaters
+## Filter comes from H2020_UK&IR_Fitness_set_up.R
+Uk.metacomm<-iteration.model(replicas=14, Meta.pool=Spp.pool, m.pool=0.01, Js=M.UK[,6], id.module=M.UK[,7], filter.env=Filter,
+                          M.dist=M.dist.UK, D50=4, m.max=1,
+                          id.fixed=NULL, D50.fixed=0, m.max.fixed=0, comm.fixed=Spp.pool,
+                          Lottery=T, it=100, prop.dead.by.it=0.05, id.obs=1:nrow(M.UK))
+
+UK.out<-resume.out(Uk.metacomm)
+names(UK.out)
+UK.out.median<-UK.out[[1]]
+N<-nrow(M.dist.UK)
+S<-UK.out.median[11:(10+N)]
+tempo<-cbind(M.UK.cent.D50.4[id.0,],0)
+colnames(tempo)[ncol(tempo)]<-"S"
+M.UK.S<-cbind(M.UK,S)
+M.UK.S<-rbind(M.UK.S,tempo)
+which(M.UK.S$grado.in.D50.4==min(M.UK.S$grado.in.D50.4))
+M.UK.S<-M.UK.S[-2191,]
+which(M.UK.S$grado.in.D50.4==min(M.UK.S$grado.in.D50.4))
+M.UK.S<-M.UK.S[-5585,]
+which(M.UK.S$grado.in.D50.4==min(M.UK.S$grado.in.D50.4))
+M.UK.S<-M.UK.S[-4462,]
+
+id.1<-which(M.UK[,7]==1)
+id.2<-which(M.UK[,7]==2)
+id.3<-which(M.UK[,7]==3)
+
+id.1<-which(M.UK[,7]==1)
+id.2<-which(M.UK[,7]==2)
+id.3<-which(M.UK[,7]==3)
+id_without_Ephemeral<-c(id.2,id.3)
+id_without_temporal<-c(id.1,id.3)
+id_without_permanent<-c(id.1,id.2)
+id_permanet<-c(id.3)
+id_temporal<-c(id.2)
+id_ephemeral<-c(id.1)
+```
+
+## Ephemeral freshwaters
+We run again the current model to obtain the richness patterns only considering the Ephemeral freshwaters.
+```{r S_only_ephemeral function, eval=FALSE}
+# Second iteration model considering only ephemeral freshwaters
+## Filter comes from H2020_UK&IR_Fitness_set_up.R
+Uk.metacomm_without_only_ephemeral<-iteration.model(replicas=14, Meta.pool=Spp.pool, m.pool=0.01, Js=M.UK[id_ephemeral,6], 
+                                               id.module=M.UK[id_ephemeral,7], filter.env=Filter[,id_ephemeral],
+                                               M.dist=M.dist.UK[id_ephemeral,id_ephemeral], D50=4, m.max=1,
+                                               id.fixed=NULL, D50.fixed=0, m.max.fixed=0, comm.fixed=Spp.pool,
+                                               Lottery=T, it=100, prop.dead.by.it=0.05, id.obs=1:length(id_ephemeral))
+Uk.metacomm_without_only_ephemeral.out<-resume.out(Uk.metacomm_without_only_ephemeral)
+S_ephy<-Uk.metacomm_without_only_ephemeral.out[[1]][10:(9+length(id_ephemeral))]
+M.UK.S<-cbind(M.UK.S,0)
+M.UK.S[id_ephemeral,ncol(M.UK.S)]<-S_ephy
+colnames(M.UK.S)[ncol(M.UK.S)]<-"S_only_ephemeral"
+```
+
+## Temporal freshwaters
+We run again the current model to obtain the richness patterns only considering the Temporal freshwaters.
+```{r S_only_temporal function, eval=FALSE}
+# Third iteration model considering only ephemeral freshwaters
+## Filter comes from H2020_UK&IR_Fitness_set_up.R
+Uk.metacomm_without_only_temporal<-iteration.model(replicas=14, Meta.pool=Spp.pool, m.pool=0.01, Js=M.UK[id_temporal,6], 
+                                                    id.module=M.UK[id_temporal,7], filter.env=Filter[,id_temporal],
+                                                    M.dist=M.dist.UK[id_temporal,id_temporal], D50=4, m.max=1,
+                                                    id.fixed=NULL, D50.fixed=0, m.max.fixed=0, comm.fixed=Spp.pool,
+                                                    Lottery=T, it=100, prop.dead.by.it=0.05, id.obs=1:length(id_temporal))
+Uk.metacomm_without_only_temporal.out<-resume.out(Uk.metacomm_without_only_temporal)
+S_temporal<-Uk.metacomm_without_only_temporal.out[[1]][10:(9+length(id_temporal))]
+M.UK.S<-cbind(M.UK.S,0)
+M.UK.S[id_temporal,ncol(M.UK.S)]<-S_temporal
+colnames(M.UK.S)[ncol(M.UK.S)]<-"S_only_temporal"
+```
+
+## Permanent freshwaters
+We run again the current model to obtain the richness patterns only considering the Permanent freshwaters.
+```{r S_only_permanent function, eval=FALSE}
+# Fourth iteration model considering only ephemeral freshwaters
+## Filter comes from H2020_UK&IR_Fitness_set_up.R
+Uk.metacomm_without_only_permanent<-iteration.model(replicas=14, Meta.pool=Spp.pool, m.pool=0.01, Js=M.UK[id_permanet,6], 
+                                                   id.module=M.UK[id_permanet,7], filter.env=Filter[,id_permanet],
+                                                   M.dist=M.dist.UK[id_permanet,id_permanet], D50=4, m.max=1,
+                                                   id.fixed=NULL, D50.fixed=0, m.max.fixed=0, comm.fixed=Spp.pool,
+                                                   Lottery=T, it=100, prop.dead.by.it=0.05, id.obs=1:length(id_permanet))
+
+Uk.metacomm_without_only_permanent.out<-resume.out(Uk.metacomm_without_only_permanent)
+S_permanent<-Uk.metacomm_without_only_permanent.out[[1]][10:(9+length(id_permanet))]
+M.UK.S<-cbind(M.UK.S,0)
+M.UK.S[id_permanet,ncol(M.UK.S)]<-S_permanent
+colnames(M.UK.S)[ncol(M.UK.S)]<-"S_only_permanent"
+```
+
+# 3. **Plotting** 
+Finally we plot all the results relationships elaborating manuscript main figures. All analysis are also carried on the same plot or have been conducted during plot elaboration. 
+
+```{r Loading packages and functions for plots  , eval=FALSE}
+# Nice colors? CUNILLERA_palette is what you need
+# Download it from https://github.com/Cunillera-Montcusi/Cunillera_Pallete
+source("C:/Users/David CM/Dropbox/DAVID DOC/LLAM al DIA/CUNILLERA_palette.R")
+library(ggplot2); library(gridExtra); library(maps); library(rnaturalearth); library(rnaturalearthdata);library(tidyverse);library(viridis)
+
+# Previous steps to built the map from UK+Ireland
+world <- ne_countries(scale = "medium", returnclass = "sf")
+worldmap = map_data('world')
+
+# Creation of some filters to select specific "groups" of data (also used in the plotting script)
+id.1<-which(M.UK[,7]==1) #Ephemerals
+id_ephemeral<-c(id.1)
+id.2<-which(M.UK[,7]==2) #Temporary
+id_temporal<-c(id.2)
+id.3<-which(M.UK[,7]==3) #Permanent
+id_permanet<-c(id.3)
+
+id_without_Ephemeral<-c(id.2,id.3)
+id_without_temporal<-c(id.1,id.3)
+id_without_permanent<-c(id.1,id.2)
+
+# M.UK contains ALL the dataset, we need to only select cells with "water" on them. 
+M.UK$`EF(1).T(2).P(3)` # This column contains the IDS of each "cell" that has each of the three types of habitats
+
+# We filter the M.UK matrix removing the cells that do not belong to any of the habitats and that terefore do not have an "S"
+#assigned (no water = no species)
+M.UK.S<-cbind(M.UK[-which(M.UK$`EF(1).T(2).P(3)`==0),],S)
+```
+
+
+## Figure 1
+Simulated species performances along ephemeral, temporal, and permanent freshwaters. The x-axis is the species ID—an
+identification number—and the y-axis is the species performance. Performance bias indicated the recruitment of individuals of each species in each freshwater environment in the coalescent assembly of communities. 
+
+```{r Figure 1, eval=FALSE}
+# Figure 1 Fitness curves ####
+S<-200       # Number of species
+b1=0.05; a1<- -S*0.65*b1
+Species<-1:S
+Perf.1<- exp(a1+b1*Species)/(1+exp(a1+b1*Species)) # Performance of species pool 1
+
+b2= -0.05; a2<- -S*0.35*b2
+Perf.2<- exp(a2+b2*Species)/(1+exp(a2+b2*Species))# performance of species pool 2
+
+Perf.matrix<-cbind(Perf.1, Perf.2)
+colnames(Perf.matrix)<-c(20,1)
+
+y<-c(rep(0,19),1,1,rep(0,19),rep(1,58),rep(0,4),rep(1,58),rep(0,19),1,1,rep(0,19))
+y[9]<-1;y[187]<-1 #;y[99:101]<-0;
+summary(glm(y~Species+I(Species^2), family = binomial))
+p<-coefficients(glm(y~Species+I(Species^2), family = binomial))
+Perf.3<- exp(p[1]+p[2]*Species+p[3]*Species^2)/(1+exp(p[1]+p[2]*Species+p[3]*Species^2))# performance species pool 3
+
+#Plot
+png(filename ="Figure1_Performance.png", 
+    width = 700*3, height = 500*3, 
+    units = "px",res = 300)
+data.frame(Species,Perf.1,Perf.2,Perf.3)%>%
+  ggplot()+
+  geom_line(aes(x=Species, y=Perf.1), size=3,colour=cividis(3)[1],alpha=1)+
+  geom_line(aes(x=Species, y=Perf.2), size=3,colour=cividis(3)[2],alpha=1)+
+  geom_line(aes(x=Species, y=Perf.3), size=3,colour=cividis(3)[3],alpha=1)+
+  scale_y_continuous(expand = c(0.02,0.02),breaks = c(0,0.25,0.5,0.75,1),labels = c(0,0.25,0.5,0.75,1))+
+  scale_x_continuous(expand = c(0.01,0.01),breaks = c(1,25,50,75,100,125,150,175,200),labels = c(1,25,50,75,100,125,150,175,200))+
+  labs(title = "Species habitat performance", y="Affinity")+
+  annotate(x=25,y=1, label="Ephemeral",geom="label", fill=cividis(3)[2], colour="white",alpha=1, size=5)+
+  annotate(x=100,y=0.9,label="Temporal", geom="label", fill=cividis(3)[3], colour="white",alpha=1, size=5)+
+  annotate(x=175,y=1,label="Permanent",geom="label", fill=cividis(3)[1], colour="white",alpha=1, size=5)+
+  theme_classic()
+dev.off()
+```
+
+```{r Figure 1 print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/Figure1_Performance.png")
+```
+
+## Figure 2A
+Expected richness in ephemeral (A), temporal (B), and permanent freshwaters (C) for the United Kingdom and Ireland in a grid cell (10 × 10 km). Richness was estimated with a coalescent model that considered dispersal only (i) through the same freshwater environment—S unique—or (ii) through the different kinds of freshwater environments (ephemeral, temporal and permanent)— S  all . The log ratio between these two estimations (iii)—S LR—indicates the relative effect of dispersal between freshwater environments on diversity. 
+
+```{r Figure 2, eval=FALSE}
+#Ephemeral waters with temporal and permanent water dispersal
+# Small histogram located at the top ____
+small_histo<-ggplot(data.frame(M.UK.S[id_ephemeral,]))+
+             aes(S)+
+             geom_histogram(col="grey70", fill="grey70", alpha=1,binwidth = 1)+
+             labs(x="Local Richness", y="counts")+
+             #geom_density(aes(y =..density..* (nrow(data.frame(M.UK.S[id_ephemeral,])))),alpha = 0.1, fill = "navy")+
+             theme_classic()
+
+# PLot Ephemeral with the others
+A <- ggplot() + geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black')+ 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59))+
+  theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_ephemeral,]), 
+             aes(x = CENTROID_X, y =CENTROID_Y, color = (S_ephy)),shape=15, size=1.25,alpha=0.6) +
+  labs(title="A)", subtitle = "Ephemeral without the others")+
+  scale_color_viridis(name="S. unique Eph.",limits=c(0,35))+
+  #scale_color_CUNILLERA(palette = "wildfire",discrete = F,name="S. unique Eph.")+ 
+  annotation_custom(ggplotGrob(small_histo),  xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+
+#Ephemeral waters without the others ____
+# Small histogram located at the top
+small_histo<-ggplot(data.frame(M.UK.S[id_ephemeral,]))+
+             aes(S_ephy)+
+             geom_histogram(col="grey70", fill="grey70", alpha=1, binwidth = 1)+
+             labs(x="Local Richness", y="counts")+
+            #geom_density(aes(y =..density..* (nrow(data.frame(M.UK.S[id_ephemeral,])))),alpha = 0.1, fill = "navy")+
+             theme_classic()
+
+# PLot Ephemeral alone
+B <-ggplot()+
+     geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black') + 
+     coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59)) +theme_void()+
+     geom_point(data = data.frame(M.UK.S[id_ephemeral,]),aes(x = CENTROID_X, y =CENTROID_Y,
+                                                             color = (S)),shape=15, size=1.25,alpha=0.6)+ 
+     labs(title="B)", subtitle = "Ephemeral with Temporal and Permanent")+
+     scale_color_viridis(name="S. all Eph.", limits=c(0,35))+
+     #scale_color_CUNILLERA(palette = "wildfire",discrete = F, name="S. all Eph.")+  
+     #scale_color_gradient(low="yellow",high="red", guide_colourbar(title ="S"))+
+     annotation_custom(ggplotGrob(small_histo),  xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+
+# Difference in richness ____
+# Data calculation
+M.UK.S[,13]<-0
+M.UK.S[id_ephemeral,13] <- log10((M.UK.S$S[id_ephemeral]/S_ephy))
+colnames(M.UK.S)[13]<-"Diff.Ephe.log.ratio"
+
+# Small histogram located at the top
+small_histo<-ggplot(data.frame(M.UK.S[id_ephemeral,]))+aes(Diff.Ephe.log.ratio)+
+               geom_histogram(col="grey70", fill="grey70", alpha=1, bins = 15)+
+               labs(x="Richness ratio", y="counts")+
+               #geom_density(aes(y =..density..*120),alpha = 0.1, fill = "navy")+
+               theme_classic()
+
+
+
+# PLot Logratio of the difference S/Seph
+C <-ggplot()+
+    geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black') + 
+    coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59)) +theme_void()+
+    geom_point(data = data.frame(M.UK.S[id_ephemeral,]), 
+    aes(x = CENTROID_X, y =CENTROID_Y, color = (Diff.Ephe.log.ratio)),shape=15, size=1.25,alpha=0.6) + 
+    labs(title="C)", subtitle = "Richness log ratio")+
+    scale_color_gradient2(midpoint = 0,
+                          low=viridis(1,direction = -1),
+                          mid="white",
+                          high=viridis(1,direction = 1),
+                          guide_colourbar(title ="SLR"))+
+    annotation_custom(ggplotGrob(small_histo), xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+
+png(filename ="Figure2_Ephemeral.png", 
+    width = 900*4.5, height = 600*4.5, 
+    units = "px",res = 300)
+grid.arrange(A,B,C, ncol=3, nrow=1)
+dev.off()
+```
+
+```{r Figure 2 print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/Figure2_Ephemeral.png")
+```
+
+## Figure 2B
+Expected richness in ephemeral (A), temporal (B), and permanent freshwaters (C) for the United Kingdom and Ireland in a grid cell (10 × 10 km). Richness was estimated with a coalescent model that considered dispersal only (i) through the same freshwater environment—S unique—or (ii) through the different kinds of freshwater environments (ephemeral, temporal and permanent)— S  all . The log ratio between these two estimations (iii)—S LR—indicates the relative effect of dispersal between freshwater environments on diversity. 
+
+```{r Figure 3, eval=FALSE}
+#Temporal waters with temporal and permanent water dispersal
+# Small histogram located at the top ____
+small_histo<-ggplot(data.frame(M.UK.S[id_temporal,]))+
+  aes(S)+
+  geom_histogram(col="grey70", fill="grey70", alpha=1,binwidth = 1)+
+  labs(x="Local Richness", y="counts")+
+  #geom_density(aes(y =..density..* (nrow(data.frame(M.UK.S[id_temporal,])))),alpha = 0.1, fill = "navy")+
+  theme_classic()
+
+# PLot Ephemeral with the others
+A <- ggplot() + geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black')+ 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59))+
+  theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_temporal,]), 
+             aes(x = CENTROID_X, y =CENTROID_Y, color = (S_temporal)),shape=15, size=1.25,alpha=0.6) +
+  labs(title="A)", subtitle = "Temporal without the others")+
+  scale_color_viridis(name="S. unique Temp.",limits=c(0,55))+
+  #scale_color_CUNILLERA(palette = "wildfire",discrete = F,name="S. unique Temp.")+ 
+  annotation_custom(ggplotGrob(small_histo),  xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+  #Ephemeral waters without the others ____
+  # Small histogram located at the top
+small_histo<-ggplot(data.frame(M.UK.S[id_temporal,]))+
+  aes(S_temporal)+
+  geom_histogram(col="grey70", fill="grey70", alpha=1, binwidth = 1)+
+  labs(x="Local Richness", y="counts")+
+  #geom_density(aes(y =..density..* (nrow(data.frame(M.UK.S[id_temporal,])))),alpha = 0.1, fill = "navy")+
+  theme_classic()
+
+# PLot Ephemeral alone
+B <-ggplot()+
+  geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black') + 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59)) +theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_temporal,]),aes(x = CENTROID_X, y =CENTROID_Y,
+                                                          color = (S)),shape=15, size=1.25,alpha=0.6)+ 
+  labs(title="B)", subtitle = "Temporal with Ephemeral and Permanent")+
+  scale_color_viridis(name="S. all Temp.",limits=c(0,55))+
+  #scale_color_CUNILLERA(palette = "wildfire",discrete = F, name="S. all Temp.")+  
+  #scale_color_gradient(low="yellow",high="red", guide_colourbar(title ="S"))+
+  annotation_custom(ggplotGrob(small_histo),  xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+# Difference in richness ____
+# Data calculation
+M.UK.S[,13]<-0
+M.UK.S[id_temporal,13] <- log10((M.UK.S$S[id_temporal]/S_temporal))
+colnames(M.UK.S)[13]<-"Diff.Temp.log.ratio"
+
+# Small histogram located at the top
+small_histo<-ggplot(data.frame(M.UK.S[id_temporal,]))+aes(Diff.Temp.log.ratio)+
+  geom_histogram(col="grey70", fill="grey70", alpha=1, bins = 15)+
+  labs(x="Richness ratio", y="counts")+
+  #geom_density(aes(y =..density..*200),alpha = 0.1, fill = "navy")+
+  theme_classic()
+
+# PLot Logratio of the difference S/Seph
+C <-ggplot()+
+  geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black') + 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59)) +theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_temporal,]), 
+             aes(x = CENTROID_X, y =CENTROID_Y, color = (Diff.Temp.log.ratio)),shape=15, size=1.25,alpha=0.6) + 
+  labs(title="C)", subtitle = "Richness log ratio")+
+  scale_color_gradient2(midpoint = 0,
+                        low=viridis(1,direction = -1),
+                        mid="white",
+                        high=viridis(1,direction = 1),
+                        guide_colourbar(title ="SLR"))+
+  annotation_custom(ggplotGrob(small_histo), xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+
+
+png(filename ="Figure3_Temporal.png", 
+    width = 900*4.5, height = 600*4.5, 
+    units = "px",res = 300)
+grid.arrange(A,B,C, ncol=3, nrow=1)
+dev.off()
+```
+
+```{r Figure 3 print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/Figure3_Temporal.png")
+```
+
+## Figure 2C
+Expected richness in ephemeral (A), temporal (B), and permanent freshwaters (C) for the United Kingdom and Ireland in a grid cell (10 × 10 km). Richness was estimated with a coalescent model that considered dispersal only (i) through the same freshwater environment—S unique—or (ii) through the different kinds of freshwater environments (ephemeral, temporal and permanent)— S  all . The log ratio between these two estimations (iii)—S LR—indicates the relative effect of dispersal between freshwater environments on diversity.
+
+```{r Figure 4, eval=FALSE}
+#Ephemeral waters with temporal and permanent water dispersal
+# Small histogram located at the top ____
+small_histo<-ggplot(data.frame(M.UK.S[id_permanet,]))+
+  aes(S)+
+  geom_histogram(col="grey70", fill="grey70", alpha=1,binwidth = 1)+
+  labs(x="Local Richness", y="counts")+
+  #geom_density(aes(y =..density..* (nrow(data.frame(M.UK.S[id_permanet,])))),alpha = 0.1, fill = "navy")+
+  theme_classic()
+
+# PLot Ephemeral with the others
+A <-ggplot() + geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black')+ 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59))+
+  theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_permanet,]), 
+             aes(x = CENTROID_X, y =CENTROID_Y, color = (S_permanent)),shape=15, size=1.25,alpha=0.6) +
+  labs(title="A)", subtitle = "Permanent without the others")+
+  scale_color_viridis(name="S. unique Perm.",limits=c(0,80))+
+  #scale_color_CUNILLERA(palette = "wildfire",discrete = F,name="S. unique Perm.")+ 
+  annotation_custom(ggplotGrob(small_histo),  xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2) 
+
+  #Ephemeral waters without the others ____
+  # Small histogram located at the top
+  small_histo<-ggplot(data.frame(M.UK.S[id_permanet,]))+
+    aes(S_permanent)+
+    geom_histogram(col="grey70", fill="grey70", alpha=1,binwidth = 1)+
+    labs(x="Local Richness", y="counts")+
+    #geom_density(aes(y =..density..* (nrow(data.frame(M.UK.S[id_permanet,])))),alpha = 0.1, fill = "navy")+
+    theme_classic()
+
+
+# PLot Ephemeral alone
+B <-ggplot()+
+  geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black') + 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59)) +theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_permanet,]),aes(x = CENTROID_X, y =CENTROID_Y,
+                                                          color = (S)),shape=15, size=1.25,alpha=0.6)+ 
+  labs(title="B)", subtitle = "Permanent with Ephemeral and Temporal")+
+  scale_color_viridis(name="S. all Perm.",limits=c(0,80))+
+  #scale_color_CUNILLERA(palette = "wildfire",discrete = F, name="S. all Perm.")+  
+  #scale_color_gradient(low="yellow",high="red", guide_colourbar(title ="S"))+
+  annotation_custom(ggplotGrob(small_histo),  xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+
+# Difference in richness ____
+# Data calculation
+M.UK.S[,13]<-0
+M.UK.S[id_permanet,13] <- log10((M.UK.S$S[id_permanet]/S_permanent))
+colnames(M.UK.S)[13]<-"Diff.Perm.log.ratio"
+
+# Small histogram located at the top
+small_histo<-ggplot(data.frame(M.UK.S[id_permanet,]))+aes(Diff.Perm.log.ratio)+
+  geom_histogram(col="grey70", fill="grey70", alpha=1,bins = 15)+
+  labs(x="Richness ratio", y="counts")+
+  #geom_density(aes(y =..density..*90),alpha = 0.1, fill = "navy")+
+  theme_classic()
+
+# PLot Logratio of the difference S/Seph
+C <-ggplot()+
+  geom_polygon(data = worldmap, aes(x = long, y = lat, group = group),fill = 'gray90', color = 'black') + 
+  coord_fixed(ratio = 1.5, xlim = c(-10.5,2), ylim = c(50, 59)) +theme_void()+
+  geom_point(data = data.frame(M.UK.S[id_permanet,]), 
+             aes(x = CENTROID_X, y =CENTROID_Y, color = (Diff.Perm.log.ratio)),shape=15, size=1.25,alpha=0.6) + 
+  labs(title="C)", subtitle = "Richness log ratio")+
+  scale_color_gradient2(midpoint = 0,
+                        low=viridis(1,direction = -1),
+                        mid="white",
+                        high=viridis(1,direction = 1),
+                        guide_colourbar(title ="SLR"))+
+  annotation_custom(ggplotGrob(small_histo), xmin = -1.5, xmax = 4.2,  ymin = 56.1, ymax = 59.2)
+
+
+
+png(filename ="Figure4_Permanent.png", 
+    width = 900*4.5, height = 600*4.5, 
+    units = "px",res = 300)
+grid.arrange(A,B,C, ncol=3, nrow=1)
+dev.off()
+```
+
+```{r Figure 4 print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/Figure4_Permanent.png")
+```
+
+## Figure 3
+Effect of the connection among freshwater environments on local diversity as a function of local diversity when this connection does not occur. The red dashed line indicates the 1:1 relationship, e.g., no effect of interfreshwater dispersal. Scatterplots show that the coupling between different types of environments foster local diversity in a magnitude that increases from ephemeral to permanent waters and from poorer to richer communities. 
+
+```{r Figure 5, eval=FALSE}
+# Scatterplot S/Sephy ____
+D_eph <- ggplot(data.frame(M.UK.S[id_ephemeral,]))+ aes(x=S_ephy, y=S)+
+  geom_point(aes(fill=S),shape=22,size=3, col="grey20", alpha=0.2)+
+  geom_smooth(method="lm", color="black", size=1.5)+
+  geom_abline(intercept=0, slope=1, color="red", size=1, linetype=2)+
+  scale_fill_viridis()+
+  #scale_fill_CUNILLERA(palette = "wildfire",discrete = F)+
+  labs(title="A)", subtitle = "Richness relationship (S. all Eph./S. unique Eph.)",
+       y="S. all Eph.",x="S. unique Eph.")+
+  geom_text(aes(y=40, x=10), label=paste("Slope=", 
+                                        as.character(round(lm(M.UK.S[id_ephemeral,]$S~S_ephy)$coefficients[2],2)),
+                                        sep=" "))+
+  scale_y_continuous(limits = c(0,40))+
+  scale_x_continuous(limits = c(0,40))+
+  theme_classic()+
+  theme(plot.margin=margin(t = 2, r = 2.5, b = 0.5, l = 2.5, unit = "cm"),
+        legend.position = "none")
+
+# Scatterplot S/Sephy ____
+D_temp <- ggplot(data.frame(M.UK.S[id_temporal,]))+ aes(x=S_temporal, y=S)+
+  geom_point(aes(fill=S),shape=22,size=3, col="grey20", alpha=0.2)+
+  geom_smooth(method="lm", color="black", size=1.5)+
+  geom_abline(intercept=0, slope=1, color="red", size=1, linetype=2)+
+  scale_fill_viridis()+
+  #scale_fill_CUNILLERA(palette = "wildfire",discrete = F)+
+  labs(title="B)", subtitle = "Richness relationship (S. all Temp./S. unique Temp.)",
+       y="S. all Temp.",x="S. unique Temp.")+
+  geom_text(aes(y=60, x=10), label=paste("Slope=", 
+                                        as.character(round(lm(M.UK.S[id_temporal,]$S~S_temporal)$coefficients[2],2)),
+                                        sep=" "))+
+  scale_y_continuous(limits = c(0,60))+
+  scale_x_continuous(limits = c(0,60))+
+  theme_classic()+
+  theme(plot.margin=margin(t = 2, r = 2.5, b = 0.5, l = 2.5, unit = "cm"),
+        legend.position = "none")
+
+# Scatterplot S/Sperm ____
+D_perm <- ggplot(data.frame(M.UK.S[id_permanet,]))+ aes(x=S_permanent, y=S)+
+  geom_point(aes(fill=S),shape=22,size=3, col="grey20", alpha=0.2)+
+  geom_smooth(method="lm", color="black", size=1.5)+
+  geom_abline(intercept=0, slope=1, color="red", size=1, linetype=2)+
+  scale_fill_viridis()+
+  #scale_fill_CUNILLERA(palette = "wildfire",discrete = F)+
+  labs(title="C)", subtitle = "Richness relationship (S. all Perm./S. unique Perm.)",
+       y="S. all Perm.",x="S. unique Perm.")+
+  geom_text(aes(y=100, x=10), label=paste("Slope=", 
+                                        as.character(round(lm(M.UK.S[id_permanet,]$S~S_permanent)$coefficients[2],2)),
+                                        sep=" "))+
+  scale_y_continuous(limits = c(0,100))+
+  scale_x_continuous(limits = c(0,100))+
+  theme_classic()+
+  theme(plot.margin=margin(t = 2, r = 2.5, b = 0.5, l = 2.5, unit = "cm"),
+        legend.position = "none")
+
+png(filename ="Figure5_Rel.png", 
+    width = 1000*7, height = 300*4.5, 
+    units = "px",res = 300)
+grid.arrange(D_eph,D_temp,D_perm, ncol=3, nrow=1)
+dev.off()
+
+table_result <- rbind(
+as.matrix(round(summary(lm(M.UK.S[id_ephemeral,]$S~S_ephy))[[4]],3)),
+as.matrix(round(summary(lm(M.UK.S[id_temporal,]$S~S_temporal))[[4]],3)),
+as.matrix(round(summary(lm(M.UK.S[id_permanet,]$S~S_permanent))[[4]],3))
+)
+```
+
+```{r Figure 5 print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/Figure5_Rel.png")
+```
+
+## Supplementary Figure 1
+Scenarios richness relationships along latitude (left column) and longitude (right column) for each aquatic habitat type: Ephemeral, Temporal, Permanent. Colors differentiate the two scenarios: S. unique where the model is run over a landscape with only one type of habitat and S. all where the model is run considering the three habitats (i.e., whole waterscape). 
+
+```{r Supplementary mat, eval=FALSE}
+# Comparison between lat and long 
+
+Plot_geogr_relationships <- gridExtra::grid.arrange(
+# Ephemeral
+gridExtra::arrangeGrob(
+data.frame(lat=data.frame(M.UK.S[id_ephemeral,])[,5],long=data.frame(M.UK.S[id_ephemeral,])[,4],
+           S=data.frame(M.UK.S[id_ephemeral,])[,12],Type="ephem_All") %>% 
+bind_rows(data.frame(lat=data.frame(M.UK.S[id_ephemeral,])[,5],long=data.frame(M.UK.S[id_ephemeral,])[,4],
+          S=S_ephy,Type="ephem_Only"))%>% 
+  ggplot()+
+  geom_jitter(aes(x=lat, y=S, fill=Type), shape=21, alpha=0.1, colour="black")+
+  geom_density2d(aes(x=lat, y=S, colour=Type),alpha=.5, size=1.5, linetype=2)+ 
+  geom_smooth(aes(x=lat, y=S, colour=Type), method = "lm")+
+  scale_fill_viridis(discrete = T)+
+  scale_colour_viridis(discrete = T, label=c("S. all Eph.", "S. unique Eph."))+
+  guides(fill="none")+labs(x="Latitude", y="Species richness")+
+  geom_text(aes(x=59,y=33), colour=viridis(1,direction = -1),
+            label=paste("Slope=",
+            round(as.numeric(lm(S_ephy~
+            data.frame(M.UK.S[id_ephemeral,])[,5])[[1]][2]),2),
+            sep=" "))+
+  geom_text(aes(x=59,y=35), colour=viridis(1,direction = 1),
+            label=paste("Slope=",
+            round(as.numeric(lm(data.frame(M.UK.S[id_ephemeral,])[,12]~
+            data.frame(M.UK.S[id_ephemeral,])[,5])[[1]][2]),2),
+            sep=" "))+
+  theme_classic(),
+
+data.frame(lat=data.frame(M.UK.S[id_ephemeral,])[,5],long=data.frame(M.UK.S[id_ephemeral,])[,4],
+           S=data.frame(M.UK.S[id_ephemeral,])[,12],Type="ephem_All") %>% 
+  bind_rows(data.frame(lat=data.frame(M.UK.S[id_ephemeral,])[,5],long=data.frame(M.UK.S[id_ephemeral,])[,4],
+                       S=S_ephy,Type="ephem_Only"))%>% 
+  ggplot()+
+  geom_jitter(aes(x=long, y=S, fill=Type), shape=21, alpha=0.1, colour="black")+
+  geom_density2d(aes(x=long, y=S, colour=Type),alpha=.3, size=1.5, linetype=2)+ 
+  geom_smooth(aes(x=long, y=S, colour=Type), method = "lm", size=2, linetype=1)+
+  scale_fill_viridis(discrete = T)+
+  scale_colour_viridis(discrete = T, label=c("S. all Eph.", "S. unique Eph."))+
+  guides(fill="none")+labs(x="Longitude", y="Species richness")+
+  geom_text(aes(x=-1,y=33), colour=viridis(1,direction = -1),
+            label=paste("Slope=",
+            round(as.numeric(lm(S_ephy~
+            data.frame(M.UK.S[id_ephemeral,])[,4])[[1]][2]),2),
+            sep=" "))+
+  geom_text(aes(x=-1,y=35), colour=viridis(1,direction = 1),
+            label=paste("Slope=",
+            round(as.numeric(lm(data.frame(M.UK.S[id_ephemeral,])[,12]~
+            data.frame(M.UK.S[id_ephemeral,])[,4])[[1]][2]),2),
+            sep=" "))+
+  theme_classic(),
+ncol=2, top="Ephemeral"),
+
+# Temporal 
+gridExtra::arrangeGrob(
+  data.frame(lat=data.frame(M.UK.S[id_temporal,])[,5],long=data.frame(M.UK.S[id_temporal,])[,4],
+             S=data.frame(M.UK.S[id_temporal,])[,12],Type="tempo_All") %>% 
+    bind_rows(data.frame(lat=data.frame(M.UK.S[id_temporal,])[,5],long=data.frame(M.UK.S[id_temporal,])[,4],
+                         S=S_temporal,Type="tempo_Only"))%>% 
+    ggplot()+
+    geom_jitter(aes(x=lat, y=S, fill=Type), shape=21, alpha=0.1, colour="black")+
+    geom_density2d(aes(x=lat, y=S, colour=Type),alpha=.5, size=1.5, linetype=2)+ 
+    geom_smooth(aes(x=lat, y=S, colour=Type), method = "lm")+
+    scale_fill_viridis(discrete = T)+
+    scale_colour_viridis(discrete = T, label=c("S. all Temp.", "S. unique Temp."))+
+    guides(fill="none")+labs(x="Latitude", y="Species richness")+
+    geom_text(aes(x=59,y=50), colour=viridis(1,direction = -1),
+              label=paste("Slope=",
+              round(as.numeric(lm(S_temporal~
+              data.frame(M.UK.S[id_temporal,])[,5])[[1]][2]),2),
+              sep=" "))+
+    geom_text(aes(x=59,y=53), colour=viridis(1,direction = 1),
+              label=paste("Slope=",
+              round(as.numeric(lm(data.frame(M.UK.S[id_temporal,])[,12]~
+              data.frame(M.UK.S[id_temporal,])[,5])[[1]][2]),2),
+              sep=" "))+
+    theme_classic(),
+  
+  data.frame(lat=data.frame(M.UK.S[id_temporal,])[,5],long=data.frame(M.UK.S[id_temporal,])[,4],
+             S=data.frame(M.UK.S[id_temporal,])[,12],Type="tempo_All") %>% 
+    bind_rows(data.frame(lat=data.frame(M.UK.S[id_temporal,])[,5],long=data.frame(M.UK.S[id_temporal,])[,4],
+                         S=S_temporal,Type="tempo_Only"))%>% 
+    ggplot()+
+    geom_jitter(aes(x=long, y=S, fill=Type), shape=21, alpha=0.1, colour="black")+
+    geom_density2d(aes(x=long, y=S, colour=Type),alpha=.3, size=1.5, linetype=2)+ 
+    geom_smooth(aes(x=long, y=S, colour=Type), method = "lm", size=2, linetype=1)+
+    scale_fill_viridis(discrete = T)+
+    scale_colour_viridis(discrete = T, label=c("S. all Temp.", "S. unique Temp."))+
+    guides(fill="none")+labs(x="Longitude", y="Species richness")+
+    geom_text(aes(x=0,y=50), colour=viridis(1,direction = -1),
+              label=paste("Slope=",
+              round(as.numeric(lm(S_temporal~
+              data.frame(M.UK.S[id_temporal,])[,4])[[1]][2]),2),
+              sep=" "))+
+    geom_text(aes(x=0,y=53), colour=viridis(1,direction = 1),
+              label=paste("Slope=",
+              round(as.numeric(lm(data.frame(M.UK.S[id_temporal,])[,12]~
+              data.frame(M.UK.S[id_temporal,])[,4])[[1]][2]),2),
+              sep=" "))+
+    theme_classic(),
+  ncol=2, top="Temporal"),
+
+# Permanent
+gridExtra::arrangeGrob(
+  data.frame(lat=data.frame(M.UK.S[id_permanet,])[,5],long=data.frame(M.UK.S[id_permanet,])[,4],
+             S=data.frame(M.UK.S[id_permanet,])[,12],Type="perma_All") %>% 
+    bind_rows(data.frame(lat=data.frame(M.UK.S[id_permanet,])[,5],long=data.frame(M.UK.S[id_permanet,])[,4],
+                         S=S_permanent,Type="perma_Only"))%>% 
+    ggplot()+
+    geom_jitter(aes(x=lat, y=S, fill=Type), shape=21, alpha=0.1, colour="black")+
+    geom_density2d(aes(x=lat, y=S, colour=Type),alpha=.5, size=1.5, linetype=2)+ 
+    geom_smooth(aes(x=lat, y=S, colour=Type), method = "lm")+
+    scale_fill_viridis(discrete = T)+
+    scale_colour_viridis(discrete = T, label=c("S. all Eph.", "S. unique Eph."))+
+    guides(fill="none")+labs(x="Latitude", y="Species richness")+
+    geom_text(aes(x=59,y=70), colour=viridis(1,direction = -1),
+              label=paste("Slope=",
+              round(as.numeric(lm(S_permanent~
+              data.frame(M.UK.S[id_permanet,])[,5])[[1]][2]),2),
+              sep=" "))+
+    geom_text(aes(x=59,y=75), colour=viridis(1,direction = 1),
+              label=paste("Slope=",
+              round(as.numeric(lm(data.frame(M.UK.S[id_permanet,])[,12]~
+              data.frame(M.UK.S[id_permanet,])[,5])[[1]][2]),2),
+              sep=" "))+
+    theme_classic(),
+  
+  data.frame(lat=data.frame(M.UK.S[id_permanet,])[,5],long=data.frame(M.UK.S[id_permanet,])[,4],
+             S=data.frame(M.UK.S[id_permanet,])[,12],Type="perma_All") %>% 
+    bind_rows(data.frame(lat=data.frame(M.UK.S[id_permanet,])[,5],long=data.frame(M.UK.S[id_permanet,])[,4],
+                         S=S_permanent,Type="perma_Only"))%>% 
+    ggplot()+
+    geom_jitter(aes(x=long, y=S, fill=Type), shape=21, alpha=0.1, colour="black")+
+    geom_density2d(aes(x=long, y=S, colour=Type),alpha=.3, size=1.5, linetype=2)+ 
+    geom_smooth(aes(x=long, y=S, colour=Type), method = "lm", size=2, linetype=1)+
+    scale_fill_viridis(discrete = T)+
+    scale_colour_viridis(discrete = T, label=c("S. all Perm.", "S. unique Perm."))+
+    guides(fill="none")+labs(x="Longitude", y="Species richness")+
+    geom_text(aes(x=0,y=70), colour=viridis(1,direction = -1),
+    label=paste("Slope=",
+    round(as.numeric(lm(S_permanent~
+                        data.frame(M.UK.S[id_permanet,])[,4])[[1]][2]),2),
+    sep=" "))+
+    geom_text(aes(x=0,y=75), colour=viridis(1,direction = 1),
+    label=paste("Slope=",
+    round(as.numeric(lm(data.frame(M.UK.S[id_permanet,])[,12]~
+                        data.frame(M.UK.S[id_permanet,])[,4])[[1]][2]),2),
+    sep=" "))+
+    theme_classic(),
+  ncol=2, top="Permanent"), 
+nrow=3)
+
+png(filename ="FigureSup_Rel.png", 
+    width = 600*7, height = 600*7, 
+    units = "px",res = 300)
+grid.arrange(Plot_geogr_relationships)
+dev.off()
+```
+
+```{r Figure SupRel print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/FigureSup_Rel.png")
+```
+
+## Extra network plot
+Network strcutre plots made from degree calculations to represent main centrality patterns accross the United Kingdom and Republic of Ireland. These plots were not included in the published ms but exemplify the distribution of the habitats and islands main centrality patterns for source, sink connectivity and stepping stone connectivity.  
+```{r Network structure, eval=FALSE}
+###########################################################################################
+            ####### ####### ####### PLOTS ####### ####### #######
+###########################################################################################
+## M.final.UK esta es la matriz completa dierenciando cuerpos de agua y tierra
+## M.final.FW.UK esta es la matriz de agua (toda junta) y tiera 
+M.final.UK->MM
+M.final.FW.UK->MM.FW
+
+
+#### In_Degree_MassEffect #### D50=4Km
+#mtext("In-degree (Mass effect) \n", outer = TRUE, cex = 1.2)
+par(mar=c(2.5,2.5,1.5,1.5),bty="l",cex=1.8)
+par(mfrow=c(3,4),oma = c(0, 0, 0, 0))
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Ephemeral (4Km)")
+ii <- cut(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==1)], 
+          breaks = seq(min(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==1)]), 
+                       max(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==1)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==1)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==1)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+text(-8,60,"IN DEGREE\nMass effect", )
+rm(ii)
+
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Temporal (4Km)")
+ii <- cut(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==2)], 
+          breaks = seq(min(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==2)]), 
+                       max(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==2)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==2)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==2)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+rm(ii)
+
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Permanent (4Km)")
+ii <- cut(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==3)], 
+          breaks = seq(min(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==3)]), 
+                       max(MM$grado.in.D50.4[which(MM$`EF(1).T(2).P(3)`==3)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==3)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==3)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+
+rm(ii)
+
+plot(MM.FW$CENTROID_Y~MM.FW$CENTROID_X,col="gray",cex=0.4,pch=15,main="All-freshwater (4Km)")
+ii <- cut(MM.FW$grado.in.D50.4, 
+          breaks = seq(min(MM.FW$grado.in.D50.4), 
+                       max(MM.FW$grado.in.D50.4), len = 600), include.lowest = TRUE)
+points(MM.FW$CENTROID_Y~MM.FW$CENTROID_X,cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+
+
+#### Out_Degree_SourcePatchEffect ####
+rm(ii)
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Ephemeral (4Km)")
+ii <- cut(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==1)], 
+          breaks = seq(min(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==1)]), 
+                       max(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==1)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==1)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==1)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+rm(ii)
+text(-8,60,"OUT DEGREE\nsource patches \nin mass effect")
+
+
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Temporal (4Km)")
+ii <- cut(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==2)], 
+          breaks = seq(min(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==2)]), 
+                       max(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==2)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==2)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==2)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+rm(ii)
+
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Permanent (4Km)")
+ii <- cut(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==3)], 
+          breaks = seq(min(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==3)]), 
+                       max(MM$grado.out.D50.4[which(MM$`EF(1).T(2).P(3)`==3)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==3)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==3)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+
+rm(ii)
+
+plot(MM.FW$CENTROID_Y~MM.FW$CENTROID_X,col="gray",cex=0.4,pch=15,main="All-freshwater (4Km)")
+ii <- cut(MM.FW$grado.out.D50.4, 
+          breaks = seq(min(MM.FW$grado.out.D50.4), 
+                       max(MM.FW$grado.out.D50.4), len = 600), include.lowest = TRUE)
+points(MM.FW$CENTROID_Y~MM.FW$CENTROID_X,cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+#mtext("Out-degree (Source effect) \n", outer = TRUE, cex = 1.2)
+
+##### bc
+rm(ii)
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Ephemeral (4Km)")
+ii <- cut(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==1)], 
+          breaks = seq(min(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==1)]), 
+                       max(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==1)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==1)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==1)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+rm(ii)
+text(-10,60,"Betweenness\n steping stone \nlandscape dispersal", pos = 4)
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Temporal (4Km)")
+ii <- cut(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==2)], 
+          breaks = seq(min(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==2)]), 
+                       max(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==2)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==2)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==2)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+rm(ii)
+
+plot(MM$CENTROID_Y~MM$CENTROID_X,col="gray",cex=0.4,pch=15,main="Permanent (4Km)")
+ii <- cut(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==3)], 
+          breaks = seq(min(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==3)]), 
+                       max(MM$bc.D50.4[which(MM$`EF(1).T(2).P(3)`==3)]), len = 600), include.lowest = TRUE)
+points(MM$CENTROID_Y[which(MM$`EF(1).T(2).P(3)`==3)]~MM$CENTROID_X[which(MM$`EF(1).T(2).P(3)`==3)],cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+
+rm(ii)
+
+plot(MM.FW$CENTROID_Y~MM.FW$CENTROID_X,col="gray",cex=0.4,pch=15,main="All-freshwater (4Km)")
+ii <- cut(MM.FW$bc.D50.4, 
+          breaks = seq(min(MM.FW$bc.D50.4), 
+                       max(MM.FW$bc.D50.4), len = 600), include.lowest = TRUE)
+points(MM.FW$CENTROID_Y~MM.FW$CENTROID_X,cex=0.4,
+       col = colorRampPalette(c("yellow", "orange", "red"))(599)[ii],pch=15)
+```
+
+```{r Figure SippNetw print, echo=FALSE, out.width='100%',  results = 'markup'}
+knitr::include_graphics("C:/Users/David CM/Dropbox/H2020/Paisaje_UK/GitHub repository/Figures to GitHub/ImageNetworkStructure.png")
+```
+
+
+
