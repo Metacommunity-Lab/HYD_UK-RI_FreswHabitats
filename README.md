@@ -13,7 +13,7 @@ Project and lines of analysis linked to the paper entitled Pondscape or watersca
 
 *5. Freshwater Habitats Trust, Bury Knowle House, Headington, Oxford OX3 9HY, UK*
 
-Contact authros at: matiasarim@gmail.com ; borthagaray@gmail.com ; david.cunillera@dcm.cat
+Contact authors at: matiasarim@gmail.com ; borthagaray@gmail.com ; david.cunillera@dcm.cat
 
 Paper DOI: https://doi.org/10.3389/fevo.2023.1125607
 
